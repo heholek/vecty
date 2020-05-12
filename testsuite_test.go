@@ -47,12 +47,14 @@ func TestMain(m *testing.M) {
 
 func testSuite(t *testing.T) *testSuiteT {
 	ts := &testSuiteT{
-		t:         t,
-		callbacks: make(map[string]interface{}),
-		strings:   &valueMocker{},
-		bools:     &valueMocker{},
-		floats:    &valueMocker{},
-		ints:      &valueMocker{},
+		t:           t,
+		callbacks:   make(map[string]interface{}),
+		strings:     &valueMocker{},
+		bools:       &valueMocker{},
+		floats:      &valueMocker{},
+		ints:        &valueMocker{},
+		truthies:    &valueMocker{},
+		isUndefined: &valueMocker{},
 	}
 	global = &objectRecorder{
 		ts:   ts,
@@ -92,9 +94,9 @@ func (v *valueMocker) get(invocation string) interface{} {
 }
 
 type testSuiteT struct {
-	t                            *testing.T
-	callbacks                    map[string]interface{}
-	strings, bools, floats, ints *valueMocker
+	t                                                   *testing.T
+	callbacks                                           map[string]interface{}
+	strings, bools, floats, ints, truthies, isUndefined *valueMocker
 
 	got    string
 	isDone bool
@@ -263,6 +265,20 @@ func (r *objectRecorder) Call(name string, args ...interface{}) jsObject {
 
 // String implements the jsObject interface.
 func (r *objectRecorder) String() string { return r.ts.strings.get(r.name).(string) }
+
+// Truthy implements the jsObject interface.
+func (r *objectRecorder) Truthy() bool { return r.ts.truthies.get(r.name).(bool) }
+
+// IsUndefined implements the jsObject interface.
+func (r *objectRecorder) IsUndefined() bool { return r.ts.isUndefined.get(r.name).(bool) }
+
+// Equal implements the jsObject interface.
+func (r *objectRecorder) Equal(other jsObject) bool {
+	if (r == nil) != (other == nil) {
+		return false
+	}
+	return r == other.(*objectRecorder)
+}
 
 // Bool implements the jsObject interface.
 func (r *objectRecorder) Bool() bool { return r.ts.bools.get(r.name).(bool) }

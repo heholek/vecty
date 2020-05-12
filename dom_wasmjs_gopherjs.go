@@ -21,6 +21,22 @@ func (h *HTML) Node() js.Value {
 	return h.node.(wrappedObject).j
 }
 
+// RenderIntoNode renders the given component into the existing HTML element by
+// replacing it.
+//
+// If the Component's Render method does not return an element of the same type,
+// an error of type ElementMismatchError is returned.
+func RenderIntoNode(node js.Value, c Component) error {
+	return renderIntoNode("RenderIntoNode", wrapObject(node), c)
+}
+
+func toLower(s string) string {
+	// We must call the prototype method here to workaround a limitation of
+	// syscall/js in both Go and GopherJS where we cannot call the
+	// `toLowerCase` string method. See https://github.com/golang/go/issues/35917
+	return js.Global().Get("String").Get("prototype").Get("toLowerCase").Call("call", js.ValueOf(s)).String()
+}
+
 var (
 	global    = wrapObject(js.Global())
 	undefined = wrappedObject{js.Undefined()}
@@ -57,11 +73,8 @@ func valueOf(v interface{}) jsObject {
 }
 
 func wrapObject(j js.Value) jsObject {
-	if j == js.Null() {
+	if j.IsNull() {
 		return nil
-	}
-	if j == js.Undefined() {
-		return undefined
 	}
 	return wrappedObject{j: j}
 }
@@ -89,7 +102,7 @@ func (w wrappedObject) Get(key string) jsObject {
 }
 
 func (w wrappedObject) Delete(key string) {
-	w.j.Call("delete", key)
+	w.j.Delete(key)
 }
 
 func (w wrappedObject) Call(name string, args ...interface{}) jsObject {
@@ -101,6 +114,21 @@ func (w wrappedObject) Call(name string, args ...interface{}) jsObject {
 
 func (w wrappedObject) String() string {
 	return w.j.String()
+}
+
+func (w wrappedObject) Truthy() bool {
+	return w.j.Truthy()
+}
+
+func (w wrappedObject) IsUndefined() bool {
+	return w.j.IsUndefined()
+}
+
+func (w wrappedObject) Equal(other jsObject) bool {
+	if w.j.IsNull() != (other == nil) {
+		return false
+	}
+	return w.j.Equal(unwrap(other).(js.Value))
 }
 
 func (w wrappedObject) Bool() bool {

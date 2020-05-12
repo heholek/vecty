@@ -1,6 +1,8 @@
 package vecty
 
-import "reflect"
+import (
+	"reflect"
+)
 
 // batch renderer singleton
 var batch = &batchRenderer{idx: make(map[Component]int)}
@@ -200,7 +202,7 @@ func (h *HTML) reconcile(prev *HTML) []Mounter {
 		h.createNode()
 	}
 
-	if h.node != prev.node {
+	if !h.node.Equal(prev.node) {
 		// reconcile properties against empty prev for new nodes.
 		h.reconcileProperties(&HTML{})
 	} else {
@@ -214,7 +216,7 @@ func (h *HTML) reconcile(prev *HTML) []Mounter {
 // element.
 func (h *HTML) reconcileProperties(prev *HTML) {
 	// If nodes match, remove any outdated properties
-	if h.node == prev.node {
+	if h.node.Equal(prev.node) {
 		h.removeProperties(prev)
 	}
 
@@ -372,7 +374,7 @@ func (h *HTML) reconcileChildren(prev *HTML) (pendingMounts []Mounter) {
 		//
 		// TODO(pdf): Add tests for node equality, keyed children
 		var (
-			new     = h.node != prev.node
+			new     = !h.node.Equal(prev.node)
 			nextKey interface{}
 		)
 		keyer, isKeyer := nextChild.(Keyer)
@@ -457,7 +459,7 @@ func (h *HTML) reconcileChildren(prev *HTML) (pendingMounts []Mounter) {
 		}
 		// If our insertion node is the current previous child, advance to the
 		// next sibling.
-		if prevChildRender != nil && prevChildRender.node == h.insertBeforeNode {
+		if prevChildRender != nil && prevChildRender.node.Equal(h.insertBeforeNode) {
 			h.insertBeforeNode = h.insertBeforeNode.Get("nextSibling")
 		}
 
@@ -485,7 +487,7 @@ func (h *HTML) reconcileChildren(prev *HTML) (pendingMounts []Mounter) {
 			insertBeforeKeyedNode = h.lastRenderedChild.nextSibling()
 			// If the next node is our old node, mark key as stable, to avoid
 			// unnecessary insertion.
-			if prevChildRender != nil && prevChildRender.node == insertBeforeKeyedNode {
+			if prevChildRender != nil && prevChildRender.node.Equal(insertBeforeKeyedNode) {
 				stableKey = true
 				insertBeforeKeyedNode = nil
 			}
@@ -531,7 +533,7 @@ func (h *HTML) reconcileChildren(prev *HTML) (pendingMounts []Mounter) {
 				pendingMounts = append(pendingMounts, m)
 			}
 
-			if hasKeyedChildren && (prevChildRender != nil && prevChildRender.node == nextChildRender.node) {
+			if hasKeyedChildren && (prevChildRender != nil && prevChildRender.node.Equal(nextChildRender.node)) {
 				// We are re-using the name node. Remove the children from
 				// keyedChildren so that we don't remove it when we remove dangling
 				// children below.
@@ -629,7 +631,7 @@ func (h *HTML) nextSibling() jsObject {
 func (h *HTML) removeChild(child *HTML) {
 	// If we're removing the current insert target, use the next
 	// sibling, if any.
-	if h.insertBeforeNode != nil && h.insertBeforeNode == child.node {
+	if h.insertBeforeNode != nil && h.insertBeforeNode.Equal(child.node) {
 		h.insertBeforeNode = h.insertBeforeNode.Get("nextSibling")
 	}
 	unmount(child)
@@ -1085,7 +1087,7 @@ func mountUnmount(next, prev ComponentOrHTML) Mounter {
 		return nil
 	}
 	if prevHTML := extractHTML(prev); prevHTML != nil {
-		if nextHTML := extractHTML(next); nextHTML == nil || prevHTML.node != nextHTML.node {
+		if nextHTML := extractHTML(next); nextHTML == nil || !prevHTML.node.Equal(nextHTML.node) {
 			for _, child := range prevHTML.children {
 				unmount(child)
 			}
@@ -1162,45 +1164,102 @@ func requestAnimationFrame(callback func(float64)) int {
 }
 
 // RenderBody renders the given component as the document body. The given
-// Component's Render method must return a "body" element.
+// Component's Render method must return a "body" element or a panic will
+// occur.
+//
+// This function blocks forever in order to prevent the program from exiting,
+// which would prevent components from rerendering themselves in the future.
+//
+// It is a short-handed form for writing:
+//
+// 	err := vecty.RenderInto("body", body)
+// 	if err !== nil {
+// 		panic(err)
+// 	}
+// 	select{} // run Go forever
+//
 func RenderBody(body Component) {
+	target := global.Get("document").Call("querySelector", "body")
+	err := renderIntoNode("RenderBody", target, body)
+	if err != nil {
+		panic(err)
+	}
+	if !isTest {
+		select {} // run Go forever
+	}
+}
+
+// ElementMismatchError is returned when the element returned by a component
+// does not match what is required for rendering.
+type ElementMismatchError struct {
+	method, got, want string
+}
+
+func (e ElementMismatchError) Error() string {
+	return "vecty: " + e.method + `: expected Component.Render to return a "` + e.want + `", found "` + e.got + `"`
+}
+
+// InvalidTargetError is returned when the element targeted by a render is
+// invalid because it is null or undefined.
+type InvalidTargetError struct {
+	method string
+}
+
+func (e InvalidTargetError) Error() string {
+	return "vecty: " + e.method + `: invalid target element is null or undefined`
+}
+
+// RenderInto renders the given component into the existing HTML element found
+// by the CSS selector (e.g. "#id", ".class-name") by replacing it.
+//
+// If there is more than one element found, the first is used. If no element is
+// found, an error of type InvalidTargetError is returned.
+//
+// If the Component's Render method does not return an element of the same type,
+// an error of type ElementMismatchError is returned.
+func RenderInto(selector string, c Component) error {
+	target := global.Get("document").Call("querySelector", selector)
+	return renderIntoNode("RenderInto", target, c)
+}
+
+func renderIntoNode(methodName string, node jsObject, c Component) error {
+	if !node.Truthy() {
+		return InvalidTargetError{method: methodName}
+	}
 	// block batch until we're done
 	batch.scheduled = true
-	nextRender, skip, pendingMounts := renderComponent(body, nil)
+	nextRender, skip, pendingMounts := renderComponent(c, nil)
 	if skip {
-		panic("vecty: RenderBody Component.SkipRender illegally returned true")
+		panic("vecty: " + methodName + ": Component.SkipRender illegally returned true")
 	}
-	if nextRender.tag != "body" {
-		panic("vecty: RenderBody expected Component.Render to return a body tag, found \"" + nextRender.tag + "\"")
+	expectTag := toLower(node.Get("nodeName").String())
+	if nextRender.tag != expectTag {
+		return ElementMismatchError{method: methodName, got: nextRender.tag, want: expectTag}
 	}
 	doc := global.Get("document")
 	if doc.Get("readyState").String() == "loading" {
-		// avoid duplicate body
 		var cb jsFunc
 		cb = funcOf(func(this jsObject, args []jsObject) interface{} {
 			cb.Release()
 
-			doc.Set("body", nextRender.node)
+			replaceNode(nextRender.node, node)
 			mount(pendingMounts...)
-			if m, ok := body.(Mounter); ok {
+			if m, ok := c.(Mounter); ok {
 				mount(m)
 			}
 			requestAnimationFrame(batch.render)
 			return undefined
 		})
 		doc.Call("addEventListener", "DOMContentLoaded", cb)
-		return
+		return nil
 	}
-	doc.Set("body", nextRender.node)
+	replaceNode(nextRender.node, node)
 	mount(pendingMounts...)
-	if m, ok := body.(Mounter); ok {
+	if m, ok := c.(Mounter); ok {
 		mount(m)
 	}
 	requestAnimationFrame(batch.render)
-	if !isTest {
-		// run Go forever
-		select {}
-	}
+	return nil
 }
 
 // SetTitle sets the title of the document.
@@ -1226,6 +1285,9 @@ type jsObject interface {
 	Delete(key string)
 	Call(name string, args ...interface{}) jsObject
 	String() string
+	Truthy() bool
+	Equal(other jsObject) bool
+	IsUndefined() bool
 	Bool() bool
 	Int() int
 	Float() float64
@@ -1240,7 +1302,7 @@ func init() {
 	if global == nil {
 		panic("vecty: only GopherJS and WebAssembly compilation is supported")
 	}
-	if global.Get("document") == undefined {
+	if global.Get("document").IsUndefined() {
 		panic("vecty: only running inside a browser is supported")
 	}
 }

@@ -2,6 +2,8 @@
 
 package vecty
 
+import "strings"
+
 // Stubs for building Vecty under a native GOOS and GOARCH, so that Vecty
 // type-checks, lints, auto-completes, and serves documentation under godoc.org
 // as with any other normal Go package that is not under GOOS=js and
@@ -28,9 +30,22 @@ func (h *HTML) Node() SyscallJSValue {
 	return htmlNodeImpl(h)
 }
 
+// RenderIntoNode renders the given component into the existing HTML element by
+// replacing it.
+//
+// If the Component's Render method does not return an element of the same type,
+// an error of type ElementMismatchError is returned.
+func RenderIntoNode(node SyscallJSValue, c Component) error {
+	return renderIntoNode("RenderIntoNode", node, c)
+}
+
+func toLower(s string) string {
+	return strings.ToLower(s)
+}
+
 var (
 	global    jsObject
-	undefined wrappedObject
+	undefined = wrappedObject{j: &jsObjectImpl{}}
 )
 
 func funcOf(fn func(this jsObject, args []jsObject) interface{}) jsFunc {
@@ -49,6 +64,14 @@ func valueOf(v interface{}) jsObject { return valueOfImpl(v) }
 type wrappedObject struct {
 	jsObject
 	j jsObject
+}
+
+type jsObjectImpl struct {
+	jsObject
+}
+
+func (e *jsObjectImpl) Equal(other jsObject) bool {
+	return e == other.(*jsObjectImpl)
 }
 
 var (
